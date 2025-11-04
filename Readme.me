@@ -1,0 +1,99 @@
+first install pip install opencv-python face_recognition numpy
+
+
+import cv2
+import mediapipe as mp
+import numpy as np
+import time
+
+# Initialize Mediapipe face detection
+mp_face_detection = mp.solutions.face_detection
+mp_drawing = mp.solutions.drawing_utils
+face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.6)
+
+# Start camera
+cap = cv2.VideoCapture(0)
+
+selected_face_embedding = None
+face_selected_time = None
+face_unblur_duration = 5  # seconds
+
+print("🟢 Press 's' to save your face (unblur for 5 seconds).")
+print("🟣 Press 'q' to quit.")
+
+def get_center(box):
+    x, y, w, h = box
+    return (x + w // 2, y + h // 2)
+
+def is_same_face(f1, f2):
+    # Compare two bounding boxes roughly (for movement tolerance)
+    c1, c2 = get_center(f1), get_center(f2)
+    dist = np.linalg.norm(np.array(c1) - np.array(c2))
+    return dist < 80  # tolerance for small movements
+
+selected_face_box = None
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_detection.process(frame_rgb)
+
+    h, w, _ = frame.shape
+    output = frame.copy()
+
+    if results.detections:
+        faces = []
+        for detection in results.detections:
+            bbox = detection.location_data.relative_bounding_box
+            x, y, bw, bh = int(bbox.xmin * w), int(bbox.ymin * h), \
+                           int(bbox.width * w), int(bbox.height * h)
+            faces.append((x, y, bw, bh))
+            cv2.rectangle(frame, (x, y), (x + bw, y + bh), (255, 0, 0), 2)
+
+        # Update selected face tracking
+        if selected_face_box is not None:
+            matched = False
+            for box in faces:
+                if is_same_face(box, selected_face_box):
+                    selected_face_box = box  # update to new position
+                    matched = True
+                    break
+            if not matched:
+                # Lost tracking temporarily — keep last known position
+                pass
+
+        # Apply blur to others
+        for box in faces:
+            if selected_face_box is not None:
+                if face_selected_time and (time.time() - face_selected_time) < face_unblur_duration:
+                    if is_same_face(box, selected_face_box):
+                        continue  # skip blur for selected
+            x, y, bw, bh = box
+            roi = output[y:y + bh, x:x + bw]
+            roi = cv2.GaussianBlur(roi, (99, 99), 30)
+            output[y:y + bh, x:x + bw] = roi
+
+    # If time expired — blur everything
+    if face_selected_time and (time.time() - face_selected_time) >= face_unblur_duration:
+        selected_face_box = None
+
+    cv2.imshow("Blur Project Advanced", output)
+    key = cv2.waitKey(1) & 0xFF
+
+    # Select face
+    if key == ord('s') and results.detections:
+        largest = max(results.detections, key=lambda d: d.location_data.relative_bounding_box.width)
+        bbox = largest.location_data.relative_bounding_box
+        selected_face_box = (int(bbox.xmin * w), int(bbox.ymin * h),
+                             int(bbox.width * w), int(bbox.height * h))
+        face_selected_time = time.time()
+        print("✅ Face saved. You will stay visible for 5 seconds.")
+
+    elif key == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
